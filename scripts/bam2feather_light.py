@@ -29,7 +29,7 @@
 #   - CpGs per read must be <= max_cpgs_per_read (default 10) (reads exceeding this are skipped)
 #
 # Example:
-#   python bam2feather_stream.py \
+#   python bam2feather_.py \
 #     -i /path/to/bams \
 #     --sites EPIC_CpGannotation.bed \
 #     -s SAMPLE -o out_feather_file \
@@ -162,7 +162,7 @@ def read_bam_files(path, recursive, file_queue, bams_amount, bam_filter):
         file_queue.put(fp)
 
 # -------------------------
-# Worker: stream CpGs from BAM and send batches to writer
+# Worker:  CpGs from BAM and send batches to writer
 # -------------------------
 
 def io_worker(
@@ -351,7 +351,7 @@ def io_worker(
     print(f"[io_worker PID {pid}] exiting", flush=True)
 
 # -------------------------
-# Writer: stream batches to Feather (Arrow IPC file)
+# Writer:  batches to Feather (Arrow IPC file)
 # -------------------------
 
 def writer_process(out_queue, output_path, n_workers, done_flag):
