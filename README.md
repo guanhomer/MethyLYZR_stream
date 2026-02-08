@@ -1,3 +1,39 @@
+## Memory-efficient streaming BAM→Feather extraction with corrected alignment filtering and 5mC/5hmC support
+
+This PR refactors the BAM→Feather preprocessing step to make **MethyLYZR** usable on large Nanopore datasets while preserving the existing classifier interface.  
+This implementation was developed in a fork of the repository and is contributed back here as an improved replacement for the original `bam2feather` script.
+
+### Key changes
+
+- **Streaming CpG extraction**  
+  Replaces alignment-level accumulation and pandas joins with a streaming design that processes reads one by one and immediately discards alignment state. This avoids materializing `get_aligned_pairs()` and reduces peak memory usage by orders of magnitude.
+
+- **Multiprocessing with bounded memory**  
+  Introduces a producer–consumer architecture (parallel BAM workers with a single writer) using queues and backpressure, enabling parallel processing without uncontrolled RAM growth.
+
+- **Corrected alignment filtering**  
+  Fixes the logic for excluding non-primary alignments by explicitly skipping secondary *or* supplementary reads, avoiding incorrect behavior caused by bitwise operators.
+
+- **5mC + 5hmC support**  
+  Treats both 5-methylcytosine and 5-hydroxymethylcytosine modbase tags as methylation events by merging calls per query position and taking the maximum probability.
+
+- **Reduced Feather footprint**  
+  Writes only the three columns required by the predictor (`epic_id`, `methylation`, `scores_per_read`), substantially reducing output size while remaining predictor-compatible.
+
+### Motivation
+
+On realistic ONT runs (millions of reads), the original BAM→Feather script can exhaust system memory due to storing full alignment objects and repeated pandas copies.  
+The forked implementation was developed to address these limitations and is now contributed back to the main repository to improve scalability and robustness.
+
+### Compatibility
+
+- Output Feather files remain fully compatible with the existing MethyLYZR predictor.
+- No changes are made to the classification model or scoring logic.
+
+This update enables routine processing of high-coverage or long-read ONT datasets without requiring extremely large-memory machines.
+
+
+
 [![DOI](https://img.shields.io/badge/DOI-10.1038%2Fs41591%E2%80%93024%E2%80%9303435%E2%80%933-blue)](https://doi.org/10.1038/s41591-024-03435-3)
 ![Python](https://img.shields.io/badge/Python-3.5%2B-blue)
 ![GitHub last commit](https://img.shields.io/github/last-commit/marasteiger/MethyLYZR)
