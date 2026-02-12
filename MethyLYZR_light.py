@@ -7,7 +7,7 @@
 #
 # Contact: steigerm@molgen.mpg.de
 # 
-# scores_blocked — Blocked matrix implementation of MethyLYZR scoring:
+# scores_blocked — Blocked matrix implementation of MethyLYZR scoring
 # scores_blocked computes the weighted class log-likelihoods and the class-specific denominator matrix used in MethyLYZR, using a memory-efficient blocked matrix multiplication (GEMM) strategy.
 # The original implementation constructs the denominator matrix via repeated class-wise recomputation of likelihoods using apply_along_axis, which:
 # - Scales as O(N · C²)
@@ -44,6 +44,9 @@ def scores_blocked(P1_log, P0_log, newX, W, read_weights, BASECOUNT=300, chunk_N
       P1_log = log(tilde_mu)          shape (N,C)
       P0_log = log(1 - tilde_mu)      shape (N,C)
     """
+    sys.stderr.write(" - Preparing arrays for blocked GEMM...\n")
+    sys.stderr.flush()
+    t_prep = time.time()
 
     N, C = P1_log.shape
     assert P0_log.shape == (N, C)
@@ -56,6 +59,10 @@ def scores_blocked(P1_log, P0_log, newX, W, read_weights, BASECOUNT=300, chunk_N
 
     n_chunks = (N + chunk_N - 1) // chunk_N
     start_time = time.time()
+
+    sys.stderr.write(f" - Starting blocked GEMM: N={N:,} C={C} chunk_N={chunk_N:,} "
+                    f"chunks={(N + chunk_N - 1)//chunk_N}\n")
+    sys.stderr.flush()
 
     for idx, s in enumerate(range(0, N, chunk_N), 1):
         e = min(s + chunk_N, N)
@@ -93,6 +100,9 @@ def scores_blocked(P1_log, P0_log, newX, W, read_weights, BASECOUNT=300, chunk_N
 
         # Denominator matrix: (C,C) with [k,j] = sum_i E[i,k]*A[i,j]
         denom += E.T @ A
+
+    sys.stderr.write(f"Done. Total time: {time.time() - t_prep:.1f}s\n")
+    sys.stderr.flush()
 
     R = np.sum(read_weights, dtype=np.float64)
     num = num / R * BASECOUNT
@@ -133,6 +143,7 @@ def predict_from_fingerprint(newX, feature_ids, centroids, W, noise, prior, read
     if isinstance(newX, pd.Series):
         newX = newX.values
 
+    log(" - Setting up P0, P1...")
     P1 = centroids.loc[feature_ids, prior.index].to_numpy()  # subset centroids by selected features and order classes
     P1 = P1 - P1 * 2 * noise[:, None] + noise[:, None]  # add noise terms
 
@@ -140,6 +151,7 @@ def predict_from_fingerprint(newX, feature_ids, centroids, W, noise, prior, read
     P1 = np.log(P1)  # log probabilities
 
     # weight matrix for probes x classes
+    log(" - Setting up W...")
     if W is None:
         # set everything to 1
         W = np.ones((P1.shape))
@@ -233,7 +245,7 @@ def predict_sample(sample_id, sample_dir, centroids, W, class_frequency, min_noi
     binary_vec = test_sample["methylation"]
     binary_vec = (binary_vec >= 0.5).astype(int)
 
-    log("Predicting classes...\n")
+    log("Predicting classes...")
     # call prediction function to get class probabilities from methylation rates
     prediction_list = predict_from_fingerprint(newX=binary_vec, feature_ids=test_sample["epic_id"], centroids=centroids,
                                                W=W, noise=noise, prior=class_frequency, read_weights=read_weights)
