@@ -7,7 +7,7 @@
 #
 # Contact: steigerm@molgen.mpg.de
 # 
-# scores_blocked — Blocked matrix implementation of MethyLYZR scoring
+# scores_blocked — Blocked matrix implementation of MethyLYZR scoring:
 # scores_blocked computes the weighted class log-likelihoods and the class-specific denominator matrix used in MethyLYZR, using a memory-efficient blocked matrix multiplication (GEMM) strategy.
 # The original implementation constructs the denominator matrix via repeated class-wise recomputation of likelihoods using apply_along_axis, which:
 # - Scales as O(N · C²)
@@ -21,6 +21,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import os
+
+import sys
+import time
 
 
 ### VARIABLES ###
@@ -51,8 +54,25 @@ def scores_blocked(P1_log, P0_log, newX, W, read_weights, BASECOUNT=300, chunk_N
     num = np.zeros(C, dtype=np.float64)
     denom = np.zeros((C, C), dtype=np.float64)   # [k, j]
 
-    for s in range(0, N, chunk_N):
+    n_chunks = (N + chunk_N - 1) // chunk_N
+    start_time = time.time()
+
+    for idx, s in enumerate(range(0, N, chunk_N), 1):
         e = min(s + chunk_N, N)
+
+        # ---- progress display ----
+        progress = idx / n_chunks
+        bar_len = 30
+        filled = int(bar_len * progress)
+        bar = "=" * filled + "-" * (bar_len - filled)
+        elapsed = time.time() - start_time
+
+        sys.stdout.write(
+            f"\rBlocked GEMM [{bar}] {idx}/{n_chunks} "
+            f"({progress*100:5.1f}%) | {elapsed:6.1f}s"
+        )
+        sys.stdout.flush()
+        # --------------------------
 
         # x: (n,1)
         x = newX[s:e].astype(np.float64, copy=False)[:, None]
@@ -164,7 +184,7 @@ def predict_from_fingerprint(newX, feature_ids, centroids, W, noise, prior, read
     return {"posterior": class_posteriors, "log_likelihoods": log_likelihoods_weighted, "epic_ids": feature_ids, "read_weights": read_weights}
 
 
-def predict_sample(sample_id, sample_dir, centroids, W, class_frequency, min_noise, methylation_lower_bound, methylation_upper_bound):
+def predict_sample(sample_id, sample_dir, centroids, W, class_frequency, min_noise, methylation_lower_bound, methylation_upper_bound, downsample=None):
     # function to load sample data, filter, call prediction for given sequencing time
 
     # params:
@@ -189,12 +209,16 @@ def predict_sample(sample_id, sample_dir, centroids, W, class_frequency, min_noi
     test_sample = test_sample[(test_sample["methylation"] <= methylation_upper_bound) | (test_sample["methylation"] >= methylation_lower_bound)]  # filter for methylation probability >0.8 or <0.2
     test_sample = test_sample[(test_sample["scores_per_read"] <= 10)]  # filter for number of features per read <= 10
 
-    # # Downsample to avoid OOM (optional but recommended for large inputs)
-    # max_rows = 100_000
-    # nrows = len(test_sample)
-    # if nrows > max_rows:
-    #     log(f" - The input has {nrows:,} rows! Downsampling to {max_rows:,} ...")
-    #     test_sample = test_sample.sample(n=max_rows, random_state=1).reset_index(drop=True)
+    # Downsample to avoid OOM (optional but recommended for large inputs)
+    if downsample is not None:
+        if downsample <= 0:
+            raise ValueError("downsample must be > 0")
+
+        if downsample < len(test_sample):
+            log(f" - Downsampling to {downsample} CpG calls...")
+            test_sample = test_sample.sample(n=downsample, random_state=42)
+        else:
+            log(" - Downsample size larger than available CpGs — skipping downsampling.")
 
     log(" - Calculating noise...")
     # calculate noise values
@@ -226,7 +250,7 @@ def log(message, separator=False):
         print("-------------------------------------------------------\n")
 
 
-def main(input, sample, centroids, weights, priors, output, minNoise, methLowerBound, methUpperBound):
+def main(input, sample, centroids, weights, priors, output, minNoise, methLowerBound, methUpperBound, flatPrior, uniformWeights, downsample):
     ### PREPROCESSING ###
 
 #     log("""
@@ -253,8 +277,24 @@ def main(input, sample, centroids, weights, priors, output, minNoise, methLowerB
     # RELIEF-based feature weights
     W_RELIEF = pd.read_feather(weights).set_index("index")
 
+    if uniformWeights:
+        log("Using uniform feature weights (RELIEF disabled).")
+        W_RELIEF = None
+    else:
+        log("Using RELIEF feature weights.")
+
     # class prior information from training data (Capper et al. 2021 + METASTASTS REF)
     CF = pd.read_csv(priors, index_col=0).squeeze("columns")
+
+    # optional flat prior
+    if flatPrior:
+        log("Using flat (uniform) class prior.")
+        CF = pd.Series(1.0 / len(CF), index=CF.index)
+    else:
+        log("Using class priors from file.")
+
+    if downsample is not None:
+        log(f"Downsampling to {downsample} CpG calls.")
 
     ##################
 
@@ -270,6 +310,7 @@ def main(input, sample, centroids, weights, priors, output, minNoise, methLowerB
         min_noise=minNoise,
         methylation_lower_bound=methLowerBound,
         methylation_upper_bound=methUpperBound,
+        downsample=downsample,
     )
 
     ##################
@@ -323,6 +364,10 @@ if __name__ == "__main__":
     parser.add_argument("--methLowerBound", type=float, default=0.8, help="Lower bound for calling methylated loci")
     parser.add_argument("--methUpperBound", type=float, default=0.2, help="Upper bound for calling unmethylated loci")
 
+    parser.add_argument("--uniformWeights", action="store_true", help="Use uniform feature weights instead of RELIEF weights")
+    parser.add_argument("--flatPrior", action="store_true", help="Use uniform (flat) class prior instead of priors file values")
+    parser.add_argument("--downsample", type=int, default=None, help="Randomly downsample to N CpG calls before prediction")
+
     args = parser.parse_args()
 
-    main(args.input, args.sample, args.centroids, args.weights, args.priors, args.output, args.minNoise, args.methLowerBound, args.methUpperBound)
+    main(args.input, args.sample, args.centroids, args.weights, args.priors, args.output, args.minNoise, args.methLowerBound, args.methUpperBound, args.flatPrior, args.uniformWeights, args.downsample)
